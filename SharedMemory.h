@@ -5,14 +5,14 @@
 #ifndef MICROKERNEL_SHAREDMEMORY_H
 #define MICROKERNEL_SHAREDMEMORY_H
 
-#include <sys/mman.h>
+#include <atomic>
 
 constexpr size_t SHARED_MEMORY_SIZE = 4096;
 
 struct SharedMemoryHeader {
     size_t size;
-    bool inputReady = false;
-    bool outputReady = false;
+    std::atomic<bool> inputReady {false};
+    std::atomic<bool> outputReady = {false};
 };
 
 class SharedMemory {

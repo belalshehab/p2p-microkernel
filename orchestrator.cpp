@@ -131,9 +131,9 @@ int main()
     std::cout << "[Orchestrator] Setting data in shared memory for Hasher to process...\n";
     char* dataToBeSent = "Hello from Orchestrator! This is shared memory data.";
     memcpy(sharedMemory.data(), dataToBeSent, strlen(dataToBeSent) + 1);
-    sharedMemory.header()->inputReady = true;
+    sharedMemory.header()->inputReady.store(true, std::memory_order_release);
 
-    while (!sharedMemory.header()->outputReady) {
+    while (!sharedMemory.header()->outputReady.load(std::memory_order_acquire)) {
         std::cout << "[Orchestrator] Waiting for data to be sent...\n";
         sleep(1);
     }

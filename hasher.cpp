@@ -61,7 +61,7 @@ int main(int argc, char* argv[]) {
 
     std::cout << "[Hasher] Waiting for data to be set in shared memeory\n";
 
-    while (!sharedMemorySegment.header()->inputReady) {
+    while (!sharedMemorySegment.header()->inputReady.load(std::memory_order_acquire)) {
         std::cout << "[Hasher] Waiting for data to be sent...\n";
         sleep(1);
     }
@@ -75,8 +75,8 @@ int main(int argc, char* argv[]) {
     sleep(3); // Simulate some processing time
     char *outputData = "Hash result from Hasher";
     memcpy(sharedMemorySegment.data(), outputData, strlen(outputData) + 1);
-    sharedMemorySegment.header()->inputReady = false;
-    sharedMemorySegment.header()->outputReady = true;
+    sharedMemorySegment.header()->inputReady.store(false, std::memory_order_release);
+    sharedMemorySegment.header()->outputReady.store(true, std::memory_order_release);
     std::cout << "[Hasher] Successfully finished processing data. Output written to shared memory.\n";
 
     std::cout << "[Hasher] Service shutting down.\n";
