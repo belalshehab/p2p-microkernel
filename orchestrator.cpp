@@ -5,6 +5,7 @@
 #include <fcntl.h>
 
 #include "ipc_common.h"
+#include "SharedMemory.h"
 
 pid_t spawn_process(const char* process_name, const char* binary_path, int socketPair[2]) {
     pid_t pid = fork();
@@ -110,6 +111,38 @@ int main()
         std::cerr << "[Orchestrator] Failed to connect to Signer service\n";
         return 1;
     }
+
+    SharedMemory sharedMemory;
+    if (!sharedMemory.create(SHARED_MEMORY_SIZE)) {
+        std::cerr << "[Orchestrator] Failed to create shared memory object\n";
+        return 1;
+    }
+    if (!sendFD(hasherSocketPair[0], sharedMemory.fd(), sharedMemory.size(), "Orchestrator")) {
+        std::cerr << "[Orchestrator] Failed to send shared memory FD to Hasher\n";
+        return 1;
+    }
+
+    std::cout << "[Orchestrator] Sent shared memory FD to Hasher (FD: " << sharedMemory.fd() << ", Size: " << sharedMemory.size() << " bytes)\n";
+
+
+    std::cout << "[Orchestrator] simulating processing time\n";
+    sleep(2);
+
+    std::cout << "[Orchestrator] Setting data in shared memory for Hasher to process...\n";
+    char* dataToBeSent = "Hello from Orchestrator! This is shared memory data.";
+    memcpy(sharedMemory.data(), dataToBeSent, strlen(dataToBeSent) + 1);
+    sharedMemory.header()->inputReady = true;
+
+    while (!sharedMemory.header()->outputReady) {
+        std::cout << "[Orchestrator] Waiting for data to be sent...\n";
+        sleep(1);
+    }
+
+    std::vector<char> dataToBeReceived(sharedMemory.size());
+    //
+    memcpy(dataToBeReceived.data(), sharedMemory.data(), sharedMemory.size());
+
+    std::cout << "[Orchestrator] Received shared memory data: " << dataToBeReceived.data() << "\n";
 
     // Wait for both children to complete
     int status;
