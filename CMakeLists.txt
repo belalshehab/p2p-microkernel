@@ -23,13 +23,24 @@ add_library(sharedMemory SharedMemory.cpp SharedMemory.h)
 
 # ── Services ───────────────────────────────────────────────────────────────────
 add_executable(orchestrator
-    orchestrator.cpp
+        Orchestrator/main.cpp
     ServiceHandle.cpp ServiceHandle.h
-    ServicesRegistry.cpp ServicesRegistry.h)
+    ServicesRegistry.cpp ServicesRegistry.h
+        Orchestrator/Orchestrator.cpp
+        Orchestrator/Orchestrator.h)
 
-add_executable(hasher hasher.cpp)
-add_executable(signer signer.cpp)
+add_executable(networkListener
+        Network_Listener/main.cpp
+        Network_Listener/NetworkListener.cpp
+        Network_Listener/NetworkListener.cpp
+        )
+
+add_executable(validator
+        Validator/main.cpp
+        Validator/validator.cpp
+        Validator/validator.h
+)
 
 target_link_libraries(orchestrator PRIVATE sharedMemory proto)
-target_link_libraries(hasher       PRIVATE sharedMemory proto)
-target_link_libraries(signer       PRIVATE sharedMemory proto)
+target_link_libraries(networkListener       PRIVATE proto)
+target_link_libraries(validator       PRIVATE proto)
