@@ -24,10 +24,11 @@ add_library(sharedMemory SharedMemory.cpp SharedMemory.h)
 # ── Services ───────────────────────────────────────────────────────────────────
 add_executable(orchestrator
         Orchestrator/main.cpp
-    ServiceHandle.cpp ServiceHandle.h
-    ServicesRegistry.cpp ServicesRegistry.h
         Orchestrator/Orchestrator.cpp
-        Orchestrator/Orchestrator.h)
+        Orchestrator/Orchestrator.h
+        Orchestrator/ServiceConnection.h
+        ServiceHandle.cpp ServiceHandle.h
+        ServicesRegistry.cpp ServicesRegistry.h)
 
 add_executable(networkListener
         Network_Listener/main.cpp
