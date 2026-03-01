@@ -1,96 +1,115 @@
 # cpp-microKernel
 
-A microkernel runtime built from scratch in C++ — mainly as a learning project, but one I'm taking seriously enough to get the architecture right. The goal is to eventually reach something close to what L4-style microkernels do: a minimal core that manages process spawning, IPC, and memory, while everything else runs as isolated user-space services.
-
----
-
-## What's been built so far
-
-### Process management
-The orchestrator forks and launches child services (`hasher`, `signer`) using `execl`. Each service gets its own Unix socket file descriptor passed as a command-line argument — no shared global state.
-
-Socket pairs use `FD_CLOEXEC` so that when a child process calls `exec`, all file descriptors it wasn't explicitly given are automatically closed. No leaking FDs across process boundaries.
-
-### Service lifecycle — `ServiceHandle` and `ServicesRegistry`
-
-Each running service is represented by a `ServiceHandle`, which owns the process PID and the orchestrator-side socket FD. It is move-only (copy constructor is deleted) to make ownership explicit — there is exactly one place that owns a service at any time.
-
-`ServiceHandle` is RAII: the destructor calls `closeServiceHandle()`, which closes the socket and sends `SIGTERM` to the process, then waits for it. All FDs are reset to `-1` after closing to prevent double-close bugs.
-
-Services are managed through `ServicesRegistry`, which is the single source of truth for all running services. The API is designed to prevent a common mistake — using a handle after transferring ownership:
-
-```cpp
-// registerService constructs, initializes, stores, and returns a non-owning pointer
-// in one step. There is no local ServiceHandle to accidentally use after the move.
-ServiceHandle* hasher = services.registerService("hasher", "./hasher");
-if (!hasher) { return 1; }
-```
-
-`unregisterAllServices()` simply clears the map — destructors handle the cleanup automatically.
-
-### IPC via Unix domain sockets
-Services communicate with the orchestrator through a simple message protocol defined in `ipc_common.h`:
-
-```cpp
-struct Message {
-    MessageType type;
-    int payloadSize;
-    char payload[256];
-};
-```
-
-Supported message types so far:
-- `CONNECT_REQUEST` / `CONNECT_RESPONSE` — service registration handshake on startup
-- `SHM_FD_TRANSFER` — passing a shared memory file descriptor to a service at runtime
-
-File descriptors are passed using `sendmsg` / `recvmsg` with `SCM_RIGHTS` — the standard POSIX way to transfer FDs between processes over a Unix socket without going through the filesystem.
-
-### Shared memory
-The `SharedMemory` class handles creating and attaching to memory segments:
-
-- On **macOS**: uses `shm_open` + `shm_unlink` (anonymous, unlinked immediately after creation)
-- On **Linux**: uses `memfd_create` (cleaner, no name needed)
-
-The memory layout puts a `SharedMemoryHeader` at the start of the segment, followed by the data region:
-
-```
-[ SharedMemoryHeader | ... data ... ]
-```
-
-The header contains two `std::atomic<bool>` flags — `inputReady` and `outputReady` — for coordination between processes without a mutex. Reads use `memory_order_acquire` and writes use `memory_order_release` to ensure the CPU doesn't reorder memory operations around the flag flips. A plain `bool` is not sufficient here — without `atomic`, the compiler is allowed to cache the value in a register and never re-read from memory, causing an infinite polling loop under optimization.
-
-The orchestrator creates the shared memory segment, sends the FD to the hasher via the socket, then simulates a delay before writing data and setting `inputReady`. The hasher polls `inputReady`, processes the data, writes the result back, and sets `outputReady`. The orchestrator polls `outputReady` and reads the result.
-
-No copying between processes. The same physical memory pages are mapped into both address spaces.
+A microkernel runtime built from scratch in C++ — mainly as a learning project, but one I'm taking seriously enough to get the architecture right. The goal is to eventually reach something close to what L4-style microkernels do: a minimal core that manages process spawning, IPC, and capability-based service discovery, while everything else runs as isolated user-space services.
 
 ---
 
 ## Architecture
 
+The system uses a **capability broker pattern**. The Orchestrator is the central process — it spawns all services, holds live Cap'n Proto capability references to each one, and brokers connections between them. Services never connect to each other directly.
+
 ```
-┌─────────────────────────────────────┐
-│             Orchestrator            │
-│  - spawns and monitors services     │
-│  - owns ServicesRegistry            │
-│  - creates shared memory segments   │
-│  - sends FDs to services at runtime │
-└──────────┬──────────────┬───────────┘
-           │ socket pair  │ socket pair
-    ┌──────▼──────┐  ┌────▼────────┐
-    │   Hasher    │  │   Signer    │
-    │  (hashing)  │  │  (signing)  │
-    └─────────────┘  └─────────────┘
+┌──────────────────────────────────────────────┐
+│                  Orchestrator                │
+│  - spawns and monitors all services          │
+│  - holds Validator::Client                   │
+│  - holds NetworkListener::Client             │
+│  - brokers connectToValidator() requests     │
+└────────────┬─────────────────┬───────────────┘
+             │  socketpair     │  socketpair
+     ┌───────▼──────┐   ┌──────▼──────────────┐
+     │  Validator   │   │   NetworkListener    │
+     │              │   │                      │
+     │  - signs /   │   │  - ingests P2P       │
+     │    validates │   │    gossip traffic    │
+     │    messages  │   │  - forwards to       │
+     │              │   │    Validator via     │
+     └──────────────┘   │    Orchestrator      │
+                        └──────────────────────┘
 ```
 
-Services don't know about each other. All coordination goes through the orchestrator.
+Communication flow when the NetworkListener receives a gossip packet:
+
+```
+NetworkListener → orchestrator.connectToValidator()
+               → validator.validateBlock("gossip data")
+               → "Validated"
+```
+
+All traffic is brokered through the Orchestrator. Two sockets total — one per service.
 
 ---
 
-## What's next
+## What's been built
 
-- **Cap'n Proto** — replace the hand-rolled message structs with a proper serialization schema, which also sets the foundation for cross-language services.
-- **Rust service** — rewrite one of the services in Rust, communicating with the C++ orchestrator over the same socket + shared memory interface.
-- **Fault tolerance and isolation** — orchestrator restarts crashed services automatically, with Linux namespaces/cgroups for proper process isolation.
+### Process management
+The Orchestrator forks and launches child services using `execl`. Each service gets its own Unix socket file descriptor passed as `argv[1]` — no shared global state, no leaking FDs. `FD_CLOEXEC` ensures file descriptors not explicitly given to a child are automatically closed on `exec`.
+
+Services are managed through `ServiceHandle` (RAII, move-only) and `ServicesRegistry` (single source of truth). The destructor closes the socket and sends `SIGTERM`, then waits. No double-close bugs.
+
+### IPC — Cap'n Proto RPC over Unix domain sockets
+
+All inter-process communication uses **Cap'n Proto RPC**. The schema is defined in `proto/orchestrator.capnp`:
+
+```capnp
+interface MicroService {
+    getName @0 () -> (name :Text);
+    ping    @1 () -> ();
+}
+
+interface Validator extends(MicroService) {
+    validateBlock @0 (data :Text) -> (signature :Text);
+}
+
+interface NetworkListener extends(MicroService) {
+    startListening @0 (port :UInt16) -> ();
+}
+
+interface Orchestrator {
+    getServices            @0 () -> (services :List(Text));
+    connectToValidator     @1 () -> (validator :Validator);
+    connectToNetworkListener @2 () -> (listener :NetworkListener);
+}
+```
+
+Each connection uses a single bidirectional `socketpair`. Both sides use `TwoPartyClient` — the Orchestrator with `Side::CLIENT` (initiates handshake), services with `Side::SERVER` (wait for handshake). After the handshake both sides are symmetric: either can call the other.
+
+### Capability broker — bidirectional RPC
+
+The Orchestrator exports itself as a bootstrap capability to each service over the existing socket. This means:
+
+- Orchestrator can call `validator.validateBlock()` — it holds a `Validator::Client`
+- Validator can call `orchestrator.connectToValidator()` — it holds an `Orchestrator::Client`
+- NetworkListener can ask for the Validator cap and call it directly through the broker
+
+The `OrchestratorImpl` is constructed empty first (before services are spawned), then service clients are injected via setters after connections are established — breaking the circular dependency.
+
+### Shared memory (dormant, planned)
+`SharedMemory.h/.cpp` and `ipc_common.h` are kept for future use. The plan is to reintroduce shared memory as a fast path for transferring large data chunks between services, while Cap'n Proto RPC handles control flow and capability passing.
+
+---
+
+## Project structure
+
+```
+├── Orchestrator/
+│   ├── Orchestrator.h/.cpp     # OrchestratorImpl — capability broker
+│   ├── ServiceConnection.h     # spawnAndConnect() helper + ServiceConnection struct
+│   └── main.cpp
+├── Validator/
+│   ├── validator.h/.cpp        # ValidatorImpl — signing/validation logic
+│   └── main.cpp
+├── Network_Listener/
+│   ├── NetworkListener.h/.cpp  # NetworkListenerImpl — P2P traffic ingestion
+│   └── main.cpp
+├── proto/
+│   └── orchestrator.capnp      # Cap'n Proto schema for all interfaces
+├── ServiceHandle.h/.cpp        # RAII process + socket ownership
+├── ServicesRegistry.h/.cpp     # Registry of all running services
+├── SharedMemory.h/.cpp         # Shared memory (dormant, planned for future)
+├── ipc_common.h                # Legacy message structs (kept for reference)
+└── ARCHITECTURE.md             # Deep-dive into the capability broker pattern
+```
 
 ---
 
@@ -103,11 +122,23 @@ cmake --build .
 ./orchestrator
 ```
 
-Requires CMake 3.x and a C++17 compiler. Tested on macOS (Apple Clang) and should work on Linux.
+Requires CMake 3.20+, a C++20 compiler, and Cap'n Proto. On macOS with Homebrew:
+
+```bash
+brew install capnp
+```
+
+---
+
+## What's next
+
+- **Real gossip parsing** — NetworkListener binds an actual UDP/TCP socket and parses P2P gossip messages instead of the current stub.
+- **Nim NetworkListener** — rewrite the listener in Nim to align with the `nim-libp2p` ecosystem, communicating with the C++ Orchestrator over the same Cap'n Proto socket interface.
+- **Shared memory fast path** — reintroduce `SharedMemory` for bulk data transfer between services, using Cap'n Proto only for signalling and capability passing.
+- **Fault tolerance** — Orchestrator detects crashed services via `SIGCHLD` and restarts them automatically.
 
 ---
 
 ## Why
 
-I'm building this to deeply understand the primitives that real microkernel and plugin runtimes are built on — `fork`/`exec`, `socketpair`, `mmap`, `sendmsg` with `SCM_RIGHTS`, atomic memory ordering across processes, and ownership semantics in systems code. The kind of stuff that is easy to use incorrectly and hard to debug when you do.
-
+I'm building this to deeply understand the primitives that real microkernel and P2P node runtimes are built on — `fork`/`exec`, `socketpair`, Cap'n Proto capability-based RPC, atomic memory ordering across processes, and ownership semantics in systems code. The kind of stuff that is easy to use incorrectly and hard to debug when you do.
