@@ -26,17 +26,16 @@ kj::Promise<void> NetworkListenerImpl::startListening(StartListeningContext cont
     auto port = context.getParams().getPort();
     std::cout << "[NetworkListener] Starting to listen on port " << port << "\n";
 
-    // Ask the Orchestrator for the Validator cap, then forward a gossip message to it
+    // Ask the Orchestrator for the Validator cap, then forward a gossip message to it.
+    // Both steps are chained inside one .then() to avoid RemotePromise flattening issues.
     return m_orchestrator.connectToValidatorRequest().send()
-        .then([](auto response) {
+        .then([](auto response) -> kj::Promise<void> {
             auto validator = response.getValidator();
-
             auto req = validator.validateBlockRequest();
             req.setData("gossip packet from NetworkListener");
-            return req.send();
-        })
-        .then([](auto response) {
-            std::cout << "[NetworkListener] Validator says: "
-                      << response.getSignature().cStr() << "\n";
+            return req.send().then([](auto validateResponse) {
+                std::cout << "[NetworkListener] Validator says: isValid="
+                          << validateResponse.getIsValid() << "\n";
+            });
         });
 }

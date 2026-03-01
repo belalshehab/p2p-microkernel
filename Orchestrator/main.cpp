@@ -26,10 +26,10 @@ int main() {
     Orchestrator::Client orchestratorCap = kj::mv(orchestratorOwned);
 
     // ── Spawn both services, exporting the orchestrator cap to each ──────────
-    auto validatorConn = spawnAndConnect(services, "validator", "./validator", ioContext, orchestratorCap);
+    auto validatorConn = spawnAndConnect(services, "validator", "../Validator/validator", ioContext, orchestratorCap);
     if (!validatorConn) return 1;
 
-    auto listenerConn = spawnAndConnect(services, "networkListener", "./networkListener", ioContext, orchestratorCap);
+    auto listenerConn = spawnAndConnect(services, "networkListener", "../Network_Listener/networkListener", ioContext, orchestratorCap);
     if (!listenerConn) return 1;
 
     // ── Get typed clients from each connection ────────────────────────────────
@@ -50,8 +50,10 @@ int main() {
     // ── Smoke-test both services ──────────────────────────────────────────────
     auto validateRequest = validatorClient.validateBlockRequest();
     validateRequest.setData("Hello from Orchestrator!");
+    validateRequest.setSignature("signatureToValidateAgainest");
     auto validateResponse = validateRequest.send().wait(ioContext.waitScope);
-    std::cout << "[Orchestrator] Validator response: " << validateResponse.getSignature().cStr() << "\n";
+    std::cout << "[Orchestrator] Validator is SignatureValid: " << validateResponse.getIsValid()
+    << ", hash: " << validateResponse.getHash().cStr()<< "\n";
 
     auto startListeningRequest = listenerClient.startListeningRequest();
     startListeningRequest.setPort(12345);

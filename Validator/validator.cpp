@@ -20,9 +20,11 @@ kj::Promise<void> ValidatorImpl::ping(PingContext context) {
 
 kj::Promise<void> ValidatorImpl::validateBlock(ValidateBlockContext context) {
     auto data = context.getParams().getData();
+    auto signature = context.getParams().getSignature();
     std::cout << "[Validator] Validating block of data: " << data.cStr() << std::endl;
 
-    //TODO: implement validation logic here
-    context.getResults().setSignature("Validated");
+    // TODO: implement real Ed25519 + SHA-256 validation with libsodium
+    context.getResults().setIsValid(true);
+    context.getResults().setHash("placeholder-hash");
     return kj::READY_NOW;
 }

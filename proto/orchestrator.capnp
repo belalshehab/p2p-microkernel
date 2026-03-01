@@ -7,7 +7,7 @@ interface MicroService {
 }
 
 interface Validator extends(MicroService) {
-    validateBlock @0 (data :Text) -> (signature :Text);
+    validateBlock @0 (data :Text, signature :Text) -> (isValid :Bool, hash :Text);
 }
 
 interface NetworkListener extends(MicroService) {
