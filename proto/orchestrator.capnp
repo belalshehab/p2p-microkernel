@@ -25,7 +25,7 @@ interface KeyGuard extends(MicroService) {
 }
 
 interface GossipNode extends(MicroService) {
-    startListening @0 (port :UInt16) -> ();
+    startListening @0 (port :UInt16, peerAddrs :List(Text)) -> ();
 
     # Write path: called by CLI/client to publish a message to the gossip topic
     publishData @1 (data :Data) -> ();

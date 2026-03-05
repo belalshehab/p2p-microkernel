@@ -92,19 +92,32 @@ kj::Promise<void> GossipNodeImpl::ping(PingContext context) {
 
 kj::Promise<void> GossipNodeImpl::startListening(StartListeningContext context) {
     auto port = context.getParams().getPort();
-    std::cout << "[GossipNode] Starting to listen on port " << port << "\n";
+    auto peerAddrs = context.getParams().getPeerAddrs();
+    std::cout << "[GossipNode] startListening on port " << port << "\n";
 
-    return m_orchestrator.connectToKeyGuardRequest().send()
-        .then([this, port](auto response) -> kj::Promise<void> {
-            m_keyGuard    = kj::heap<KeyGuard::Client>(response.getKeyGuard());
-            g_keyGuardCap = m_keyGuard.get();
+    return m_orchestrator.connectToKeyGuardRequest().send().then(
+        [this, port, peerAddrs](auto response) -> kj::Promise<void> {
+          m_keyGuard = kj::heap<KeyGuard::Client>(response.getKeyGuard());
+          g_keyGuardCap = m_keyGuard.get();
 
-            std::thread([port]() {
-                NimMain();
-                nimGossipNodeInit(static_cast<uint16_t>(port));
-            }).detach();
+          std::thread([port, peerAddrs]() {
+              std::vector<std::string> addrs;
+              for (auto addr : peerAddrs) {
+                  addrs.push_back(addr.cStr());
+              }
+              std::vector<const char*> cstrs;
+              for (auto& s : addrs) {
+                  cstrs.push_back(s.c_str());
+              }
+            NimMain();
+            nimGossipNodeInit(
+                static_cast<uint16_t>(port),
+                cstrs.data(),
+                static_cast<int>(cstrs.size())
+                );
+          }).detach();
 
-            return gossipLoop();
+          return gossipLoop();
         });
 }
 
