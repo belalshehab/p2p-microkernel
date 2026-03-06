@@ -1,10 +1,19 @@
 #include <iostream>
 #include "key_guard.h"
+#include <map>
 
-constexpr auto KEY_GUARD_PRIVATE_KEY = "e03e8bda99fbdc02b9059c205aba18fc1c10f3d83abc414a9d158aa4282da73f";
 
-static const std::vector<std::pair<std::string, const char*>> KNOWN_NODES = {
-    { "node-1", "45b89ba5700a7011e97e3159a5618fa55fb537e5188832df9d83cbb3bfe9eb4a" }
+const auto node1 = "12D3KooWSvR8BKSPus2phMeQyErvomKpv9FhsrVWAiQ15GUtTdwU";
+const auto node2 = "12D3KooWJRKrXXqGybdRWnjQBMCiR6757UCEgTZsNSY3fnzWUM7s";
+
+static const std::unordered_map<std::string, const char*> PRIVATE_KEYS = {
+    { node1, "8b12a312e6df7a37eed915a7b005ed9d7c534ccff3f1fdcfb3bac9d605b29e44" },
+    { node2, "a2333759dfbb47b5a5b2d4ef241e32297199655af27da1090005e96358e98e2a" }
+};
+
+static const std::unordered_map<std::string, const char*> KNOWN_NODES = {
+    { node1, "c054fcb7717ac01bca5684c91e2e49643eabbb5ad67db2c8410621d3118c68d9" },
+    { node2, "07e0e800e708edd9238f552c23073a224a86a51ae03ab190a47958db08c8178a" }
 };
 
 KeyGuardImpl::KeyGuardImpl(kj::StringPtr name)
@@ -14,7 +23,7 @@ KeyGuardImpl::KeyGuardImpl(kj::StringPtr name)
     uint8_t seed[crypto_sign_SEEDBYTES];
     sodium_hex2bin(
         seed, sizeof(seed),
-        KEY_GUARD_PRIVATE_KEY, 64,
+        PRIVATE_KEYS.at(node1), 64,
         nullptr, nullptr, nullptr
     );
 
@@ -53,19 +62,19 @@ kj::Promise<void> KeyGuardImpl::validateBlock(ValidateBlockContext context) {
 
     std::string key(reinterpret_cast<const char*>(senderId.begin()), senderId.size());
 
-    auto it = m_trustedPeers.find(key);
-    if (it == m_trustedPeers.end()) {
-        std::cout << "[KeyGuard] Unknown sender — rejecting\n";
-        context.getResults().setIsValid(false);
-        context.getResults().setValidatorSignature(capnp::Data::Reader(nullptr, 0));
-        return kj::READY_NOW;
-    }
+    // auto it = m_trustedPeers.find(key);
+    // if (it == m_trustedPeers.end()) {
+    //     std::cout << "[KeyGuard] Unknown sender — rejecting\n";
+    //     context.getResults().setIsValid(false);
+    //     context.getResults().setValidatorSignature(capnp::Data::Reader(nullptr, 0));
+    //     return kj::READY_NOW;
+    // }
 
     int result = crypto_sign_verify_detached(
         signature.begin(),
         data.begin(),
         data.size(),
-        it->second.data()
+        m_trustedPeers.at(node1).data()
     );
     bool isValid = (result == 0);
     std::cout << "[KeyGuard] Block signature: " << (isValid ? "VALID" : "INVALID") << "\n";

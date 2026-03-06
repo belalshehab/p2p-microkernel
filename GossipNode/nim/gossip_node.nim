@@ -1,5 +1,6 @@
 import os, chronos, stew/byteutils
 import libp2p
+import libp2p/crypto/crypto as crypto
 import libp2p/protocols/pubsub/gossipsub
 import libp2p/protocols/pubsub/rpc/messages
 import libp2p/protocols/pubsub/pubsub
@@ -9,12 +10,16 @@ import libp2p/multiaddress
 
 
 
-proc nimGossipNodeOnGossip(data: ptr uint8, dataSize: csize_t, signature: ptr uint8, signatureSize: csize_t):
-    cint {.importc, cdecl.}
+proc nimGossipNodeOnGossip(
+    senderId: ptr uint8, senderIdSize: csize_t,
+    data: ptr uint8, dataSize: csize_t,
+    signature: ptr uint8, signatureSize: csize_t
+): cint {.importc, cdecl.}
 
 var gGossipSub: GossipSub
 var gSwitch: Switch
 var gTopic = "microp2p/v1/gossip"
+var gPeerId: string   # set after switch starts, read by C++ via nimGossipNodeGetPeerId
 
 # we will use cap'n proto serilization for the message format, but for this example, we'll just use a simple byte array
 # ── binary framing helpers ────────────────────────────────────────────────────
@@ -82,6 +87,7 @@ proc gossipNodeMain(port: uint16, peerAddrs: seq[string]) {.async.} =
 
                 let (senderId, data, signature) = decodeFrame(msg.data)
                 let ret = nimGossipNodeOnGossip(
+                    unsafeAddr senderId[0], senderId.len.csize_t,
                     unsafeAddr data[0], data.len.csize_t,
                     unsafeAddr signature[0], signature.len.csize_t
                 )
@@ -95,6 +101,8 @@ proc gossipNodeMain(port: uint16, peerAddrs: seq[string]) {.async.} =
         gGossipSub.subscribe(gTopic, nil)
                 
         await gSwitch.start()
+
+        gPeerId = $gSwitch.peerInfo.peerId   # store for C++ to read
 
         echo "[Nim] Switch started with GossipSub!"
         echo "[Nim] Subscribed to topic: ", gTopic
@@ -119,8 +127,11 @@ proc nimGossipNodeInit(port: uint16, peerAddrsPtr: ptr cstring, peerAddrsCount: 
     var peerAddrs: seq[string]
     for i in 0 ..< int(peerAddrsCount):
         peerAddrs.add($cast[ptr UncheckedArray[cstring]](peerAddrsPtr)[i])
-        
     waitFor gossipNodeMain(port, peerAddrs)
+
+proc nimGossipNodeGetPeerId(): cstring {.exportc, cdecl.} =
+    # Returns the PeerID string after init. Returns empty string if called too early.
+    return cstring(gPeerId)
 
 
 
